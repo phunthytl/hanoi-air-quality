@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import os
 import time
 import math
@@ -17,22 +16,19 @@ import folium
 from folium.plugins import TimestampedGeoJson
 from branca.colormap import linear
 
-# =========================
+
 # CONFIG & CONSTANTS
-# =========================
 st.set_page_config(page_title="Hanoi Air Quality: 30-day Analysis", layout="wide")
 
-# Bạn có thể thay bằng biến môi trường nếu muốn: os.environ.get("OWM_API_KEY")
 OWM_API_KEY = "490f66c05505839fe0646bb5aa5770dc"
 CITY_NAME = "Hanoi"
 COUNTRY_CODE = "VN"
 TARGET_DAYS = 30
-CHUNK_DAYS = 5  # OWM free thường chỉ cho 5 ngày history/đợt
-TIMEZONE = timezone(timedelta(hours=7))  # Asia/Bangkok (UTC+7)
+CHUNK_DAYS = 5
+TIMEZONE = timezone(timedelta(hours=7))
 
-# =========================
+
 # UTILS
-# =========================
 @st.cache_data(show_spinner=False, ttl=3600)
 def geocode_city(city, country, api_key):
     url = "https://api.openweathermap.org/geo/1.0/direct"
@@ -49,7 +45,6 @@ def unix(dt):
     return int(dt.replace(tzinfo=timezone.utc).timestamp())
 
 def to_local(ts):
-    # OWM trả dt là UNIX UTC
     return datetime.fromtimestamp(int(ts), tz=timezone.utc).astimezone(TIMEZONE)
 
 @st.cache_data(show_spinner=True, ttl=1800)
@@ -74,7 +69,6 @@ def get_air_history(lat, lon, start_dt, end_dt, api_key):
         try:
             r = requests.get(url, params=params, timeout=45)
             if r.status_code == 429:
-                # hạn mức -> nghỉ 2s rồi thử lại
                 time.sleep(2)
                 r = requests.get(url, params=params, timeout=45)
             r.raise_for_status()
@@ -82,7 +76,6 @@ def get_air_history(lat, lon, start_dt, end_dt, api_key):
             if isinstance(js, dict) and "list" in js:
                 collected.extend(js["list"])
         except requests.HTTPError as e:
-            # Nếu vượt giới hạn lịch sử (free), vẫn tiếp tục với phần lấy được
             st.info(f"⚠️ Không lấy được đoạn {window_start.date()} → {window_end.date()}: {e}")
         window_end = window_start - timedelta(days=1)
     # loại trùng theo timestamp
@@ -166,7 +159,7 @@ def summarize_insight(df):
     idx_max = df["pm2_5"].idxmax()
     time_max = df.loc[idx_max, "time"]
     max_pm25 = df.loc[idx_max, "pm2_5"]
-    bad_hours_share = (df["aqi"] >= 4).mean()  # tỉ lệ giờ 'Poor' & 'Very Poor'
+    bad_hours_share = (df["aqi"] >= 4).mean()
     mean_pm25 = df["pm2_5"].mean()
     median_pm25 = df["pm2_5"].median()
     daily = df.groupby("day")["pm2_5"].mean().sort_values(ascending=False)
@@ -189,27 +182,32 @@ def make_wordcloud(text_series):
     bio.seek(0)
     return Image.open(bio)
 
-# =========================
+
 # SIDEBAR
-# =========================
 st.sidebar.title("⚙️ Controls")
-st.sidebar.write("Phân tích chất lượng không khí tại **Hà Nội** (OWM).")
+st.sidebar.write("Phân tích chất lượng không khí tại **Hà Nội**.")
 target_days = st.sidebar.slider("Số ngày gần nhất", 7, 30, TARGET_DAYS, 1)
 show_regression = st.sidebar.checkbox("Scatter + OLS regression", True)
 use_treemap = st.sidebar.selectbox("Phân cấp", ["Sunburst AQI → Weekday", "Treemap AQI → Hour"], index=0)
 map_mode = st.sidebar.selectbox("Bản đồ", ["Folium (Timestamped)", "Plotly Mapbox"], index=0)
 
-# =========================
+
 # DATA FETCH
-# =========================
-st.title("🌫️ Hanoi Air Quality — 30-day Analysis (OpenWeatherMap)")
-st.caption("Nguồn: OpenWeatherMap Air Pollution API. Ứng dụng sẽ tự báo nếu chỉ lấy được ≤5 ngày do giới hạn gói.")
+st.markdown(
+    """
+    <h2 style='text-align: center; font-size: 28px;'>
+        🌫️ Phân tích chất lượng không khí tại Hà Nội trong 30 ngày gần nhất (OpenWeatherMap)
+    </h2>
+    """,
+    unsafe_allow_html=True
+)
 
 # Geocode
 lat, lon, geo_meta = geocode_city(CITY_NAME, COUNTRY_CODE, OWM_API_KEY)
 
 # Time window
-end_local = datetime.now(tz=TIMEZONE)
+today_local = datetime.now(tz=TIMEZONE).date()
+end_local = datetime.combine(today_local, datetime.min.time(), tzinfo=TIMEZONE)
 start_local = end_local - timedelta(days=target_days-1)
 # OWM history dùng UTC
 start_utc = start_local.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
@@ -227,17 +225,20 @@ got_days = (df["time"].max().date() - df["time"].min().date()).days + 1
 if got_days < target_days - 1:
     st.warning(f"Chỉ lấy được ~{got_days} ngày dữ liệu (giới hạn API). Vẫn tiến hành phân tích trên phần dữ liệu này.")
 
-# =========================
+
 # SUMMARY KPIs & STORYTELLING
-# =========================
 kpi = summarize_insight(df)
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("Khoảng thời gian", kpi["date_range"])
-c2.metric("Số bản ghi (giờ)", f"{kpi['n']:,}")
-c3.metric("PM2.5 cao nhất (µg/m³)", f"{kpi['max_pm25']:.1f}" if kpi["max_pm25"] else "—", help=f"Thời điểm: {kpi['max_pm25_time'] or '—'}")
-c4.metric("Tỉ lệ giờ AQI xấu (≥Poor)", f"{kpi['bad_hours_share']*100:.1f}%" if kpi["bad_hours_share"] is not None else "—")
+c1.markdown(f"<div style='font-size:22px;font-weight:600'>Khoảng thời gian</div>"
+            f"<div style='font-size:26px'>{kpi['date_range']}</div>", unsafe_allow_html=True)
+c2.markdown(f"<div style='font-size:22px;font-weight:600'>Số bản ghi (giờ)</div>"
+            f"<div style='font-size:26px'>{kpi['n']:,}</div>", unsafe_allow_html=True)
+c3.markdown(f"<div style='font-size:22px;font-weight:600'>PM2.5 cao nhất (µg/m³)</div>"
+            f"<div style='font-size:26px'>{kpi['max_pm25']:.1f}</div>", unsafe_allow_html=True)
+c4.markdown(f"<div style='font-size:22px;font-weight:600'>Tỉ lệ giờ AQI xấu (≥Poor)</div>"
+            f"<div style='font-size:26px'>{kpi['bad_hours_share']*100:.1f}%</div>", unsafe_allow_html=True)
 
-with st.expander("🧾 1 trang storytelling (insights chính)"):
+with st.expander("🧾 Storytelling"):
     st.markdown(f"""
 **Bối cảnh.** Phân tích chuỗi thời gian chất lượng không khí ở Hà Nội trong giai đoạn **{kpi['date_range']}**.  
 **Quy mô dữ liệu.** {kpi['n']:,} quan sát giờ.  
@@ -250,7 +251,6 @@ with st.expander("🧾 1 trang storytelling (insights chính)"):
 - **Tương quan PM2.5–PM10:** Hệ số tương quan cao → nguồn hạt mịn và thô cùng biến thiên; **pm_ratio** giúp nhận diện ưu thế hạt mịn.  
 - **Độ trễ 24h:** Trung bình trượt 24h làm mượt biến động, hữu ích để cảnh báo sớm nếu xu hướng tăng kéo dài.
 
-> Lưu ý: Nếu bạn dùng gói OWM trả phí, dữ liệu 30 ngày sẽ đầy đủ hơn; bản hiện tại có thể bị giới hạn ≤5 ngày.
 """)
 
 # =========================
@@ -353,7 +353,7 @@ else:
 st.subheader("☁️ WordCloud từ nhãn AQI (lặp theo tần suất)")
 wc_img = make_wordcloud(df["aqi_label"])
 if wc_img is not None:
-    st.image(wc_img, caption="WordCloud về nhãn AQI", use_column_width=True)
+    st.image(wc_img, caption="WordCloud về nhãn AQI", use_container_width=True)
 else:
     st.info("Không đủ dữ liệu văn bản để tạo WordCloud.")
 
@@ -369,11 +369,3 @@ def to_csv_bytes(df_in):
 
 st.download_button("⬇️ Tải CSV", data=to_csv_bytes(df), file_name="hanoi_air_quality.csv", mime="text/csv")
 
-# =========================
-# FOOTER NOTES
-# =========================
-st.caption("""
-- **Xử lý thiếu**: nội suy theo thời gian & forward/backward fill (điểm đo cố định).
-- **Đặc trưng mới**: `pm_ratio` (PM2.5/PM10), `rolling_pm25_24h`, `rolling_pm10_24h`, nhãn `aqi_label`, biến thời gian (giờ, weekday, weekend).
-- **Hạn chế API**: Nếu gói OWM không cho đủ 30 ngày, ứng dụng vẫn chạy với phần dữ liệu hiện có.
-""")
